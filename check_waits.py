@@ -6,28 +6,10 @@ Runs on a schedule (GitHub Actions). For each watched ride it fetches the live
 themeparks.wiki data and fires a notification when:
   - the ride's next-available Lightning Lane return time becomes EARLIER than
     your booked time (ll_before), or
-  - the standby wait drops to or below your threshold (standby_at_or_below), or
-  - a Lightning Lane becomes AVAILABLE (ll_available), optionally before a cutoff.
+  - the standby wait drops to or below your threshold (standby_at_or_below).
 
 State is kept in state.json (committed back by the workflow) so you only get
 alerted once per transition, not every run.
-
-Self-healing state (v2)
------------------------
-Every state entry is stamped with the Orlando-local date and the value that
-triggered it. This fixes stale-state problems:
-
-  * Daily auto-reset: if the stored date is not today's Orlando date, the entry
-    is treated as re-armed. This clears overnight carry-over (the watcher does
-    not run while the park is closed) and any stray test/manual "true" values.
-
-  * Improvement re-fire: if a condition is still active but the deal gets
-    materially better (LL >= LL_IMPROVE_MIN minutes earlier, or standby
-    >= SB_IMPROVE_MIN minutes lower), it alerts again once, then re-latches on
-    the new, better value.
-
-Legacy boolean state (e.g. {"Space Mountain": true}) is still read correctly and
-transparently upgraded to the new format on the next run.
 
 Notifications:
   - method "ntfy": free push to your phone via ntfy.sh (install the ntfy app,
@@ -36,6 +18,7 @@ Notifications:
 
 Zero third-party dependencies: standard library only.
 """
+
 import json
 import os
 import sys
@@ -44,27 +27,16 @@ import smtplib
 import urllib.request
 import urllib.error
 from email.message import EmailMessage
-from datetime import datetime, timezone
-
-try:
-    from zoneinfo import ZoneInfo
-    ORLANDO_TZ = ZoneInfo("America/New_York")
-except Exception:  # pragma: no cover - zoneinfo present on py3.9+ runners
-    ORLANDO_TZ = None
+from datetime import datetime
 
 API = "https://api.themeparks.wiki/v1"
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
 STATE_PATH = os.path.join(HERE, "state.json")
 
-# How much "better" a still-active condition must get before we re-alert.
-LL_IMPROVE_MIN = 15   # Lightning Lane must be >= 15 min earlier than last alert
-SB_IMPROVE_MIN = 10   # Standby must be >= 10 min lower than last alert
-
 
 def get_json(url):
-    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "disney-watcher/2.0"})
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "disney-watcher/1.0"})
     with urllib.request.urlopen(req, timeout=25) as r:
         return json.loads(r.read().decode("utf-8"))
 
@@ -80,14 +52,6 @@ def load(path, default):
 def save_state(state):
     with open(STATE_PATH, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
-
-
-def orlando_today():
-    """Return today's date string (YYYY-MM-DD) in Orlando local time."""
-    if ORLANDO_TZ is not None:
-        return datetime.now(ORLANDO_TZ).strftime("%Y-%m-%d")
-    # Fallback: approximate US Eastern as UTC-4 (DST). Good enough to bucket days.
-    return datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() - 4 * 3600, timezone.utc).strftime("%Y-%m-%d")
 
 
 def park_local(iso):
@@ -107,14 +71,6 @@ def park_local(iso):
 def hhmm_to_minutes(hhmm):
     h, m = hhmm.split(":")
     return int(h) * 60 + int(m)
-
-
-def read_entry(st):
-    """Normalise a stored state entry (legacy bool or v2 dict) into
-    (active, day, val)."""
-    if isinstance(st, dict):
-        return bool(st.get("active")), st.get("day"), st.get("val")
-    return bool(st), None, None
 
 
 def notify_ntfy(topic, title, body):
@@ -174,8 +130,6 @@ def main():
         print("config.json needs a 'parks' list", file=sys.stderr)
         sys.exit(1)
 
-    today = orlando_today()
-
     # Search every configured park and index attractions by name.
     by_name = {}
     for p in parks:
@@ -193,36 +147,37 @@ def main():
 
     for w in cfg.get("watches", []):
         name = w["ride"]
-        key = name
-
         # "done" — you've ridden it (or muted it); never alert until un-done.
         if w.get("done"):
-            state[key] = {"active": False, "day": today, "val": None}
+            state[name] = False
             continue
-
-        active, last_day, last_val = read_entry(state.get(key))
-
-        # Daily auto-reset: yesterday's (or a stale test's) latch never blocks a
-        # fresh day. If the stored stamp is not today, treat as re-armed.
-        if last_day != today:
-            active = False
-            last_val = None
-
         r = by_name.get(name)
+        key = name
+        # State is {active, rev}. "rev" tracks the watch's revision from the app.
+        # If the watch was re-created/modified (rev changed), re-arm so it can alert
+        # again even if the previous instance had already fired.
+        st = state.get(key)
+        if isinstance(st, dict):
+            active = bool(st.get("active"))
+            prev_rev = st.get("rev")
+        else:
+            active = bool(st)   # legacy boolean
+            prev_rev = None
+        cur_rev = w.get("rev")
+        if cur_rev is not None and cur_rev != prev_rev:
+            active = False      # watch changed since last alert — re-arm
         if not r or r.get("status") != "OPERATING":
-            state[key] = {"active": False, "day": today, "val": None}
+            state[key] = {"active": False, "rev": cur_rev}
             continue
 
         q = r.get("queue") or {}
         hit = None
-        cur_val = None  # the numeric value behind this hit, for improvement tracking
 
         # standby rule
         thresh = w.get("standby_at_or_below")
         sb = (q.get("STANDBY") or {}).get("waitTime")
         if thresh is not None and sb is not None and sb <= thresh:
             hit = f"{name}: standby is now {sb} min (\u2264 {thresh})."
-            cur_val = sb
 
         # lightning lane "earlier than" rule
         if not hit and w.get("ll_before"):
@@ -232,7 +187,6 @@ def main():
                 tgt = hhmm_to_minutes(w["ll_before"])
                 if cur is not None and cur < tgt:
                     hit = f"{name}: Lightning Lane now {cur_label} \u2014 earlier than your {w['ll_before']}! Open the Disney app to modify."
-                    cur_val = cur
 
         # lightning lane "becomes available" rule (for rides you don't have booked)
         if not hit and w.get("ll_available"):
@@ -245,32 +199,18 @@ def main():
                     ok = cur is not None and cur < tgt
                 if ok:
                     hit = f"{name}: Lightning Lane now AVAILABLE \u2014 return {cur_label}! Book it fast in the Disney app."
-                    cur_val = cur
 
-        # Decide whether to alert.
-        #  * Newly true  -> alert (classic transition).
-        #  * Still true but materially BETTER than the value we last alerted on
-        #    -> alert again once, then re-latch on the improved value. For LL
-        #    (earlier is better) and standby (lower is better), "better" means a
-        #    smaller number, so the same margin test works for both.
-        should_fire = False
-        if hit:
-            if not active:
-                should_fire = True
-            elif last_val is not None and cur_val is not None:
-                margin = LL_IMPROVE_MIN if w.get("standby_at_or_below") is None else SB_IMPROVE_MIN
-                if cur_val <= last_val - margin:
-                    should_fire = True
-
-        if should_fire:
+        # Pure transition: alert ONCE when a condition newly becomes true, then stay
+        # quiet while it persists. When it clears, re-arm so a genuine new occurrence
+        # (e.g. a fresh cancellation) alerts again. To stop alerts for a ride you've
+        # ridden or don't care about, mark it done in the app.
+        if hit and not active:
             fired.append(hit)
-            state[key] = {"active": True, "day": today, "val": cur_val}
-        elif hit:
-            # active and not enough improvement: keep latched, refresh stamp
-            state[key] = {"active": True, "day": today, "val": last_val if last_val is not None else cur_val}
+            state[key] = {"active": True, "rev": cur_rev}
+        elif not hit:
+            state[key] = {"active": False, "rev": cur_rev}
         else:
-            # condition cleared: re-arm
-            state[key] = {"active": False, "day": today, "val": None}
+            state[key] = {"active": True, "rev": cur_rev}
 
     if fired:
         title = "Disney alert"
