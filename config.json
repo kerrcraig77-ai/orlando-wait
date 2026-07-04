@@ -38,14 +38,6 @@
       "ll_available": false,
       "avail_before": null,
       "done": false
-    },
-    {
-      "ride": "Mickey's PhilharMagic",
-      "ll_before": "16:32",
-      "standby_at_or_below": null,
-      "ll_available": false,
-      "avail_before": null,
-      "done": false
     }
   ],
   "notify": {
