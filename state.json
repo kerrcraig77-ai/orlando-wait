@@ -1,3 +1,7 @@
 {
-  "Space Mountain": true
+  "Space Mountain": {
+    "active": true,
+    "day": "2026-07-04",
+    "val": 955
+  }
 }
