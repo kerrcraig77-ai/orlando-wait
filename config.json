@@ -39,6 +39,15 @@
       "avail_before": null,
       "done": false,
       "rev": 1783195463381
+    },
+    {
+      "ride": "\"it's a small world\"",
+      "ll_before": "18:30",
+      "standby_at_or_below": null,
+      "ll_available": false,
+      "avail_before": null,
+      "done": false,
+      "rev": 1783195468047
     }
   ],
   "notify": {
