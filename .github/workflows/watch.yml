@@ -24,17 +24,23 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Run watcher
-        run: python check_waits.py
+      - name: Run watcher (60s loop for ~4.5 min)
+        run: |
+          END=$((SECONDS+270))
+          while [ $SECONDS -lt $END ]; do
+            python check_waits.py || true
+            [ $SECONDS -lt $END ] && sleep 55
+          done
 
       - name: Persist alert state
+        continue-on-error: true
         run: |
           if [[ -n "$(git status --porcelain state.json)" ]]; then
             git config user.name "disney-watcher"
             git config user.email "actions@users.noreply.github.com"
             git add state.json
             git commit -m "Update alert state [skip ci]"
-            git push
+            git push || echo "Push failed."
           else
             echo "No state change to commit."
           fi
