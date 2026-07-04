@@ -147,8 +147,15 @@ def main():
 
     for w in cfg.get("watches", []):
         name = w["ride"]
+        # "done" — you've ridden it (or muted it); never alert until un-done.
+        if w.get("done"):
+            state[name] = False
+            continue
         r = by_name.get(name)
         key = name
+        # normalise any legacy dict state back to a simple boolean "active" flag
+        st = state.get(key)
+        active = st.get("active") if isinstance(st, dict) else bool(st)
         if not r or r.get("status") != "OPERATING":
             state[key] = False
             continue
@@ -183,8 +190,11 @@ def main():
                 if ok:
                     hit = f"{name}: Lightning Lane now AVAILABLE \u2014 return {cur_label}! Book it fast in the Disney app."
 
-        was = bool(state.get(key))
-        if hit and not was:
+        # Pure transition: alert ONCE when a condition newly becomes true, then stay
+        # quiet while it persists. When it clears, re-arm so a genuine new occurrence
+        # (e.g. a fresh cancellation) alerts again. To stop alerts for a ride you've
+        # ridden or don't care about, mark it done in the app.
+        if hit and not active:
             fired.append(hit)
             state[key] = True
         elif not hit:
