@@ -38,6 +38,14 @@
       "ll_available": false,
       "avail_before": null,
       "done": false
+    },
+    {
+      "ride": "Space Mountain",
+      "ll_before": "23:34",
+      "standby_at_or_below": null,
+      "ll_available": false,
+      "avail_before": null,
+      "done": false
     }
   ],
   "notify": {
