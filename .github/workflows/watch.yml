@@ -2,7 +2,9 @@ name: Disney wait watcher
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "0 11 * * *"
+    - cron: "30 16 * * *"
+    - cron: "0 22 * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -15,6 +17,7 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -24,23 +27,18 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Run watcher (60s loop for ~4.5 min)
+      - name: Watch (60s poll for ~5.5 hours)
         run: |
-          END=$((SECONDS+270))
+          END=$((SECONDS + 19800))
           while [ $SECONDS -lt $END ]; do
             python check_waits.py || true
+            if [[ -n "$(git status --porcelain state.json)" ]]; then
+              git config user.name "disney-watcher"
+              git config user.email "actions@users.noreply.github.com"
+              git add state.json
+              git commit -m "Update alert state [skip ci]" >/dev/null 2>&1 || true
+              git pull --rebase >/dev/null 2>&1 || true
+              git push >/dev/null 2>&1 || true
+            fi
             [ $SECONDS -lt $END ] && sleep 55
           done
-
-      - name: Persist alert state
-        continue-on-error: true
-        run: |
-          if [[ -n "$(git status --porcelain state.json)" ]]; then
-            git config user.name "disney-watcher"
-            git config user.email "actions@users.noreply.github.com"
-            git add state.json
-            git commit -m "Update alert state [skip ci]"
-            git push || echo "Push failed."
-          else
-            echo "No state change to commit."
-          fi
