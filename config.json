@@ -35,6 +35,11 @@
       "ride": "Slinky Dog Dash",
       "ll_before": "15:30",
       "standby_at_or_below": null
+    },
+    {
+      "ride": "Space Mountain",
+      "ll_before": "23:00",
+      "standby_at_or_below": null
     }
   ],
   "notify": {
