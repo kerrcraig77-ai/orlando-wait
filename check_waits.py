@@ -162,7 +162,7 @@ def main():
         if thresh is not None and sb is not None and sb <= thresh:
             hit = f"{name}: standby is now {sb} min (\u2264 {thresh})."
 
-        # lightning lane rule
+        # lightning lane "earlier than" rule
         if not hit and w.get("ll_before"):
             rt = (q.get("RETURN_TIME") or {}).get("returnStart")
             if rt:
@@ -170,6 +170,18 @@ def main():
                 tgt = hhmm_to_minutes(w["ll_before"])
                 if cur is not None and cur < tgt:
                     hit = f"{name}: Lightning Lane now {cur_label} \u2014 earlier than your {w['ll_before']}! Open the Disney app to modify."
+
+        # lightning lane "becomes available" rule (for rides you don't have booked)
+        if not hit and w.get("ll_available"):
+            rtq = q.get("RETURN_TIME") or {}
+            if rtq.get("state") == "AVAILABLE" and rtq.get("returnStart"):
+                cur, cur_label = park_local(rtq["returnStart"])
+                ok = True
+                if w.get("avail_before"):
+                    tgt = hhmm_to_minutes(w["avail_before"])
+                    ok = cur is not None and cur < tgt
+                if ok:
+                    hit = f"{name}: Lightning Lane now AVAILABLE \u2014 return {cur_label}! Book it fast in the Disney app."
 
         was = bool(state.get(key))
         if hit and not was:
